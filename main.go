@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"image"
 	"io/fs"
 	"log"
 	"os"
@@ -14,10 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/diamondburned/gotk4/pkg/gdk/v4"
-	"github.com/diamondburned/gotk4/pkg/glib/v2"
+	"github.com/diamondburned/gotk4/pkg/cairo"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gtkcord4/internal/bmp"
+	"github.com/diamondburned/gtkcord4/internal/syncg"
 	"github.com/edsrzf/mmap-go"
 	"github.com/pkg/errors"
 )
@@ -84,9 +85,9 @@ func activate(ctx context.Context, app *gtk.Application) {
 		`, tmpdir))
 		// err := sh(ctx, fmt.Sprintf(`
 		// 	ffmpeg -y \
-		// 		-hide_banner -loglevel error \
+		// 		-hide_banner -loglevel error -threads 1 \
 		// 		-stream_loop -1 -re -i ~/Videos/LLOGE.mp4 \
-		// 		-c:v bmp -update 1 -atomic_writing 1 %s/screen.bmp
+		// 		-c:v bmp -pix_fmt rgba -update 1 -atomic_writing 1 %s/screen.bmp
 		// `, tmpdir))
 		if err != nil {
 			select {
@@ -124,17 +125,31 @@ func activate(ctx context.Context, app *gtk.Application) {
 		}
 	}()
 
-	screen := gtk.NewPicture()
-	screen.SetKeepAspectRatio(true)
-	screen.AddTickCallback(func(_ gtk.Widgetter, clock gdk.FrameClocker) bool {
-		bmpr.acquire(func(txt *gdk.MemoryTexture) { screen.SetPaintable(txt) })
-		return true
+	var set bool
+	screen := gtk.NewDrawingArea()
+	screen.SetDrawFunc(func(screen *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+		if !set {
+			bmpr.acquire(func(s *cairo.Surface, rect image.Rectangle) {
+				cr.SetSourceSurface(s, 0, 0)
+			})
+		} else {
+			bmpr.refresh()
+		}
+		cr.Paint()
 	})
 
-	glib.TimeoutAdd(1000/FPS, func() bool {
-		screen.QueueDraw()
-		return ctx.Err() == nil
-	})
+	go func() {
+		for {
+			if bmpr.isDirty() {
+				screen.QueueDraw()
+			}
+		}
+	}()
+	// glib.TimeoutAdd(1000/FPS, func() bool {
+	// 	screen.QueueDraw()
+	// 	return true
+	// 	// return ctx.Err() == nil
+	// })
 
 	win := gtk.NewApplicationWindow(app)
 	win.SetDefaultSize(800, 600)
@@ -142,13 +157,23 @@ func activate(ctx context.Context, app *gtk.Application) {
 	win.Show()
 }
 
+type cairoSurface struct {
+	*cairo.Surface
+	Pix []uint8
+}
+
 type bmpReader struct {
 	path string
 	freq time.Duration
 	dec  *bmp.BGRADecoder
 
-	bmp  *bmp.NBGRA
-	txtv atomic.Value // *gdk.MemoryTexture
+	// gtk thread
+	surface syncg.AtomicValue[*cairoSurface]
+
+	// our (reader) thread
+	mut   sync.Mutex
+	bmp   *bmp.NBGRA
+	dirty uint32
 }
 
 func newBMPReader(path string, fps int) *bmpReader {
@@ -176,7 +201,26 @@ func (r *bmpReader) start(ctx context.Context) error {
 	}
 }
 
+var updateLatency = [10]time.Duration{}
+var updatePrintCount int
+
 func (r *bmpReader) update(ctx context.Context) error {
+	start := time.Now()
+	defer func() {
+		end := time.Now()
+		delta := end.Sub(start)
+		updateLatency[updatePrintCount%len(updateLatency)] = delta
+		updatePrintCount++
+
+		if updatePrintCount%len(updateLatency) == 0 {
+			var sum time.Duration
+			for _, d := range updateLatency {
+				sum += d
+			}
+			log.Println("update latency:", sum/time.Duration(len(updateLatency)))
+		}
+	}()
+
 	f, err := os.Open(r.path)
 	if err != nil {
 		return errors.Wrap(err, "failed to open bmp snapshot")
@@ -190,33 +234,79 @@ func (r *bmpReader) update(ctx context.Context) error {
 	defer buf.Unmap()
 
 	// TODO: figure out double buffering to avoid locking for too long.
+	r.mut.Lock()
 	r.bmp, err = r.dec.Decode(buf, r.bmp)
+	r.mut.Unlock()
 	if err != nil {
 		return errors.Wrap(err, "failed to decode bmp snapshot")
 	}
 
-	// This unfortunately makes a newly-allocated copy of the image every call.
-	// It's probably the slowest part of this code and why you should write your
-	// own Paintable.
-	newTexture := gdk.NewMemoryTexture(
-		r.bmp.Rect.Dx(),
-		r.bmp.Rect.Dy(),
-		// I'm not sure if this is the format that GTK uses. They might be
-		// swizzling this on their own in the code which adds cost.
-		gdk.MemoryB8G8R8A8Premultiplied,
-		glib.NewBytesWithGo(r.bmp.Pix),
-		uint(r.bmp.Stride),
-	)
+	if r.surface.IsZero() {
+		// Thankfully in our case, alpha does not matter. When we say FormatARGB in
+		// Cairo, it actually means BGRA. See gotk4/pkg/cairo/surface_image.go.
+		surface := cairo.CreateImageSurface(cairo.FormatARGB32, r.bmp.Rect.Dx(), r.bmp.Rect.Dy())
+		surfacePix := surface.Data()
 
-	r.txtv.Store(newTexture)
+		r.surface.Store(&cairoSurface{
+			Surface: surface,
+			Pix:     surfacePix,
+		})
+	}
+
+	atomic.StoreUint32(&r.dirty, 1)
 	return nil
 }
 
-func (r *bmpReader) acquire(f func(*gdk.MemoryTexture)) {
-	txt, _ := r.txtv.Swap((*gdk.MemoryTexture)(nil)).(*gdk.MemoryTexture)
-	if txt != nil {
-		f(txt)
+func (r *bmpReader) isDirty() bool {
+	return atomic.SwapUint32(&r.dirty, 0) == 1
+}
+
+var blitLatency = [10]time.Duration{}
+var blitPrintCount int
+
+func (r *bmpReader) refresh() bool {
+	start := time.Now()
+	defer func() {
+		end := time.Now()
+		delta := end.Sub(start)
+		blitLatency[updatePrintCount%len(updateLatency)] = delta
+		blitPrintCount++
+
+		if blitPrintCount%len(blitLatency) == 0 {
+			var sum time.Duration
+			for _, d := range blitLatency {
+				sum += d
+			}
+			log.Println("blit latency:", sum/time.Duration(len(blitLatency)))
+		}
+	}()
+
+	surface, ok := r.surface.Load()
+	if !ok {
+		// no surface yet
+		return false
 	}
+
+	surface.Flush()
+
+	r.mut.Lock()
+	copy(surface.Data(), r.bmp.Pix)
+	r.mut.Unlock()
+
+	surface.MarkDirty()
+
+	return true
+}
+
+func (r *bmpReader) acquire(f func(*cairo.Surface, image.Rectangle)) {
+	if !r.refresh() {
+		return
+	}
+
+	surface, _ := r.surface.Load()
+	rect := r.bmp.Rect // we don't write this anymore after the first run
+
+	f(surface.Surface, rect)
 }
 
 func sh(ctx context.Context, shcmd string) error {
