@@ -1,0 +1,14 @@
+github.com/diamondburned/gotk4/pkg v0.0.5-0.20230307013122-e86c9b44a4bf h1:gArVqZUa3I9mjEp1/gcS+9kqpgo9Bbuo7iusRx6+0yQ=
+github.com/diamondburned/gotk4/pkg v0.0.5-0.20230307013122-e86c9b44a4bf/go.mod h1:TlEbXY5lIHroGa1rcKOzTRHyAk3HIEfnuui/XseMHKk=
+github.com/edsrzf/mmap-go v1.1.0 h1:6EUwBLQ/Mcr1EYLE4Tn1VdW1A4ckqCQWZBw8Hr0kjpQ=
+github.com/edsrzf/mmap-go v1.1.0/go.mod h1:19H/e8pUPLicwkyNgOykDXkJ9F0MHE+Z52B8EIth78Q=
+github.com/justincormack/go-memfd v0.0.0-20170219213707-6e4af0518993 h1:YnMJVKw7M5rE15UsVY7w2cnxcnArci7v1g3butq0YbI=
+github.com/justincormack/go-memfd v0.0.0-20170219213707-6e4af0518993/go.mod h1:VYi8SD2j14Nh9hNT7l57A00YUx/tMxY6pPA1IGljdrg=
+github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
+go4.org/unsafe/assume-no-moving-gc v0.0.0-20230209150437-ee73d164e760 h1:gH0IO5GDYAcawu+ThKrvAofVTgJjYaoOZ5rrC4pS2Xw=
+go4.org/unsafe/assume-no-moving-gc v0.0.0-20230209150437-ee73d164e760/go.mod h1:FftLjUGFEDu5k8lt0ddY+HcrH/qU/0qk+H8j9/nTl3E=
+golang.org/x/sync v0.1.0 h1:wsuoTGHzEhffawBOhz5CYhcrV4IdKZbEyZjBMuTp12o=
+golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+golang.org/x/sys v0.5.0 h1:MUK/U/4lj1t1oPg0HfuXDN/Z1wv31ZJ/YcPiGccS4DU=
+golang.org/x/sys v0.5.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
